@@ -247,6 +247,79 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
+        .file-drop-area {
+            border: 2px dashed #dee2e6;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin: 1rem;
+            text-align: center;
+            color: #6c757d;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .file-drop-area.drag-over {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+            color: #007bff;
+        }
+        
+        .file-drop-area:hover {
+            border-color: #007bff;
+            color: #007bff;
+        }
+        
+        .attached-files {
+            padding: 0 1rem;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+            background-color: #f8f9fa;
+            border-radius: 0.25rem;
+            border: 1px solid #dee2e6;
+        }
+        
+        .file-info {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+        
+        .file-name {
+            font-weight: bold;
+            font-size: 0.9rem;
+        }
+        
+        .file-size {
+            font-size: 0.8rem;
+            color: #6c757d;
+        }
+        
+        .file-remove {
+            background: none;
+            border: none;
+            color: #dc3545;
+            cursor: pointer;
+            padding: 0.25rem;
+            border-radius: 0.25rem;
+            font-size: 1rem;
+        }
+        
+        .file-remove:hover {
+            background-color: #f5c6cb;
+        }
+        
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -265,7 +338,10 @@
             const [systemPrompt, setSystemPrompt] = useState('');
             const [tempSystemPrompt, setTempSystemPrompt] = useState('');
             const [error, setError] = useState('');
+            const [attachedFiles, setAttachedFiles] = useState([]);
+            const [isDragOver, setIsDragOver] = useState(false);
             const messagesEndRef = useRef(null);
+            const fileInputRef = useRef(null);
 
             useEffect(() => {
                 const savedApiKey = localStorage.getItem('openai_api_key');
@@ -305,7 +381,7 @@
             };
 
             const sendMessage = async () => {
-                if (!inputValue.trim()) return;
+                if (!inputValue.trim() && attachedFiles.length === 0) return;
                 
                 if (!apiKey) {
                     setError('APIキーが設定されていません。設定画面でAPIキーを入力してください。');
@@ -313,9 +389,23 @@
                     return;
                 }
 
-                const userMessage = { role: 'user', content: inputValue };
+                let messageContent = inputValue;
+                
+                // ファイルが添付されている場合の処理
+                if (attachedFiles.length > 0) {
+                    const fileDescriptions = attachedFiles.map(f => `[添付ファイル: ${f.name} (${f.size})]`).join('\n');
+                    messageContent = inputValue ? `${inputValue}\n\n${fileDescriptions}` : fileDescriptions;
+                }
+
+                const userMessage = { 
+                    role: 'user', 
+                    content: messageContent,
+                    attachments: attachedFiles.length > 0 ? attachedFiles : undefined
+                };
+                
                 setMessages(prev => [...prev, userMessage]);
                 setInputValue('');
+                setAttachedFiles([]);
                 setIsLoading(true);
                 setError('');
 
@@ -390,6 +480,72 @@
                 setError('');
             };
 
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setIsDragOver(true);
+            };
+
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+                
+                const files = Array.from(e.dataTransfer.files);
+                handleFiles(files);
+            };
+
+            const handleFileSelect = (e) => {
+                const files = Array.from(e.target.files);
+                handleFiles(files);
+                e.target.value = '';
+            };
+
+            const handleFiles = (files) => {
+                const validFiles = files.filter(file => {
+                    const maxSize = 10 * 1024 * 1024; // 10MB
+                    if (file.size > maxSize) {
+                        setError(`ファイル "${file.name}" は10MBを超えています。`);
+                        return false;
+                    }
+                    return true;
+                });
+
+                const newFiles = validFiles.map(file => ({
+                    id: Date.now() + Math.random(),
+                    file: file,
+                    name: file.name,
+                    size: formatFileSize(file.size),
+                    type: file.type
+                }));
+
+                setAttachedFiles(prev => [...prev, ...newFiles]);
+            };
+
+            const formatFileSize = (bytes) => {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            };
+
+            const removeFile = (fileId) => {
+                setAttachedFiles(prev => prev.filter(f => f.id !== fileId));
+            };
+
+            const readFileAsBase64 = (file) => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result.split(',')[1]);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+            };
+
             return (
                 <div className="app">
                     <div className="header">
@@ -408,12 +564,18 @@
                                 <div style={{ textAlign: 'center', color: '#6c757d', marginTop: '2rem' }}>
                                     <p>ChatGPTとの会話を始めましょう！</p>
                                     <p>まず設定画面でAPIキーを入力してください。</p>
+                                    <p>ファイルをドラッグ&ドロップで添付することもできます。</p>
                                 </div>
                             )}
                             
                             {messages.map((message, index) => (
                                 <div key={index} className={`message ${message.role}`}>
-                                    {message.content}
+                                    <div style={{ whiteSpace: 'pre-wrap' }}>{message.content}</div>
+                                    {message.attachments && message.attachments.length > 0 && (
+                                        <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', opacity: 0.8 }}>
+                                            📎 {message.attachments.length}個のファイルが添付されました
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                             
@@ -433,6 +595,50 @@
                             </div>
                         )}
 
+                        <div 
+                            className={`file-drop-area ${isDragOver ? 'drag-over' : ''}`}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop}
+                            onClick={() => fileInputRef.current?.click()}
+                        >
+                            <div>📎 ファイルをドラッグ&ドロップまたはクリックして添付</div>
+                            <div style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                                最大10MB、複数ファイル対応
+                            </div>
+                        </div>
+
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={handleFileSelect}
+                        />
+
+                        {attachedFiles.length > 0 && (
+                            <div className="attached-files">
+                                <div style={{ fontSize: '0.9rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                                    添付ファイル ({attachedFiles.length})
+                                </div>
+                                {attachedFiles.map(file => (
+                                    <div key={file.id} className="file-item">
+                                        <div className="file-info">
+                                            <div className="file-name">{file.name}</div>
+                                            <div className="file-size">{file.size}</div>
+                                        </div>
+                                        <button 
+                                            className="file-remove"
+                                            onClick={() => removeFile(file.id)}
+                                            title="ファイルを削除"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         <div className="input-area">
                             <input
                                 type="text"
@@ -442,7 +648,7 @@
                                 placeholder="メッセージを入力してください..."
                                 disabled={isLoading}
                             />
-                            <button onClick={sendMessage} disabled={isLoading || !inputValue.trim()}>
+                            <button onClick={sendMessage} disabled={isLoading || (!inputValue.trim() && attachedFiles.length === 0)}>
                                 送信
                             </button>
                         </div>
